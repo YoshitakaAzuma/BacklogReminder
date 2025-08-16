@@ -1,0 +1,12 @@
+{
+  "name": "backlog-slack-reminder",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "luxon": "^3.4.4",
+    "date-holidays": "^3.0.2"
+  }
+}
