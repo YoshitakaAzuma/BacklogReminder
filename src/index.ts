@@ -213,7 +213,7 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
       : `*${title}*\n（該当なし）`;
 
   const text: string = [
-    "@y.azuma",
+    `<@${assigneeId}>`,
     `:spiral_calendar_pad: Backlog 期限リマインド (${iso(today)})`,
     section('🟥 期限切れ', groups.overdue),
     section('🟧 当日', groups.today),
