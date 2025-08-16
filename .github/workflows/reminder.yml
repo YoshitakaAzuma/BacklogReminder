@@ -1,0 +1,31 @@
+name: Backlog Daily Reminders
+
+on:
+  schedule:
+    - cron: "30 0 * * 1-5" # JST 09:30 (Mon-Fri)
+    - cron: "30 9 * * 1-5" # JST 18:30 (Mon-Fri)
+  workflow_dispatch: {}     # 手動実行も可
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run reminder
+        run: npm start
+        env:
+          BACKLOG_SPACE: ${{ secrets.BACKLOG_SPACE }}
+          BACKLOG_DOMAIN: ${{ secrets.BACKLOG_DOMAIN }} # 例: backlog.jp / backlog.com
+          BACKLOG_API_KEY: ${{ secrets.BACKLOG_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TIMEZONE: Asia/Tokyo
+          SKIP_HOLIDAYS: "true"
