@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "ts-node --loader ts-node/esm src/index.ts"
+    "start": "ts-node --loader ts-node/esm src/index.ts",
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "test": "echo \"No tests specified\" && exit 0"
   },
   "dependencies": {
     "date-holidays": "^3.0.2",
