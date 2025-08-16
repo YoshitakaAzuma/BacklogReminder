@@ -80,14 +80,15 @@ const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
 const today = DateTime.now().setZone(TIMEZONE).startOf('day');
 const in2 = today.plus({ days: 2 });
 const in3 = today.plus({ days: 3 });
-const iso = (d: DateTime): string => d.toISODate(); // YYYY-MM-DD
+const iso = (d: DateTime): string => d.toISODate() || ''; // YYYY-MM-DD
 
 // ==== 祝日スキップ ====
 if (SKIP_HOLIDAYS) {
   const hd = new Holidays('JP');
   const hol = hd.isHoliday(today.toJSDate());
   if (hol) {
-    console.log(`祝日(${hol.name})のため通知をスキップします: ${iso(today)}`);
+    const holidayName = Array.isArray(hol) ? hol[0]?.name || '祝日' : (hol as any)?.name || '祝日';
+    console.log(`祝日(${holidayName})のため通知をスキップします: ${iso(today)}`);
     process.exit(0);
   }
 }
