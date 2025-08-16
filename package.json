@@ -1,9 +1,8 @@
 {
   "name": "backlog-slack-reminder",
   "version": "1.0.0",
-  "type": "module",
   "scripts": {
-    "start": "ts-node --esm src/index.ts",
+    "start": "ts-node src/index.ts",
     "build": "tsc",
     "lint": "tsc --noEmit",
     "test": "echo \"No tests specified\" && exit 0"
