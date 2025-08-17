@@ -80,15 +80,14 @@ const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
 const today = DateTime.now().setZone(TIMEZONE).startOf('day');
 const in2 = today.plus({ days: 2 });
 const in3 = today.plus({ days: 3 });
-const iso = (d: DateTime): string => d.toISODate() || ''; // YYYY-MM-DD
+const iso = (d: DateTime): string => d.toISODate(); // YYYY-MM-DD
 
 // ==== 祝日スキップ ====
 if (SKIP_HOLIDAYS) {
   const hd = new Holidays('JP');
   const hol = hd.isHoliday(today.toJSDate());
   if (hol) {
-    const holidayName = Array.isArray(hol) ? hol[0]?.name || '祝日' : (hol as any)?.name || '祝日';
-    console.log(`祝日(${holidayName})のため通知をスキップします: ${iso(today)}`);
+    console.log(`祝日(${hol.name})のため通知をスキップします: ${iso(today)}`);
     process.exit(0);
   }
 }
@@ -150,23 +149,20 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
 };
 
 // ==== メインロジック ====
-// 要件: 自分の課題 / 期限が「残り3日」「残り2日」「当日」「期限切れ」
+// 要件: 全ての課題 / 期限が「残り3日」「残り2日」「当日」「期限切れ」
 (async () => {
   if (!SPACE || !API_KEY || !SLACK_WEBHOOK_URL) {
     throw new Error('環境変数 BACKLOG_SPACE / BACKLOG_API_KEY / SLACK_WEBHOOK_URL が未設定です。');
   }
 
-  const me = await getMyself();
-  const assigneeId = me.id;
-
   // 期限の範囲：過去(期限切れ含む)〜3日後までを一気に取得してグルーピング
   const since = today.minus({ days: 365 }); // 1年分拾えば十分。必要に応じて短縮可
   const until = in3;
 
-  // まず全ての課題を取得して、プロジェクトIDを抽出
+  // 全ての課題を取得（担当者の絞り込みなし）
   const allIssues = await fetchAllIssues({
     apiKey: API_KEY,
-    'assigneeId[]': String(assigneeId),
+    // 担当者の絞り込みを削除
     dueDateSince: iso(since),
     dueDateUntil: iso(until),
     sort: 'dueDate',
@@ -203,9 +199,11 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
     else if (diffDays === 3) groups.in3.push(i);
   }
 
-  // Slack メッセージ整形
-  const issueLine = (it: BacklogIssue): string =>
-    `• <https://${SPACE}.${DOMAIN}/view/${it.issueKey}|${it.issueKey}> ${it.summary} [${it.status.name}]`;
+  // Slack メッセージ整形（担当者名も表示）
+  const issueLine = (it: BacklogIssue): string => {
+    const assigneeName = it.assignee ? `@${it.assignee.name}` : '未割り当て';
+    return `• <https://${SPACE}.${DOMAIN}/view/${it.issueKey}|${it.issueKey}> ${it.summary} [${it.status.name}] (${assigneeName})`;
+  };
 
   const section = (title: string, arr: BacklogIssue[]): string =>
     arr.length
