@@ -196,11 +196,9 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
     else if (diffDays === 1) groups.tomorrow.push(i);
   }
 
-  // Slack メッセージ整形（担当者名も表示）
-  const issueLine = (it: BacklogIssue): string => {
-    const assigneeName = it.assignee ? `@${it.assignee.name}` : '未割り当て';
-    return `• <https://${SPACE}.${DOMAIN}/view/${it.issueKey}|${it.issueKey}> ${it.summary} [${it.status.name}] (${assigneeName})`;
-  };
+    // Slack メッセージ整形
+  const issueLine = (it: BacklogIssue): string =>
+    `• <https://${SPACE}.${DOMAIN}/view/${it.issueKey}|${it.issueKey}> ${it.summary} [${it.status.name}]`;
 
   const section = (title: string, arr: BacklogIssue[]): string =>
     arr.length
