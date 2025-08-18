@@ -60,8 +60,7 @@ interface BacklogUser {
 interface IssueGroups {
   overdue: BacklogIssue[];
   today: BacklogIssue[];
-  in2: BacklogIssue[];
-  in3: BacklogIssue[];
+  tomorrow: BacklogIssue[];
 }
 
 interface SlackMessage {
@@ -78,8 +77,7 @@ const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
 
 // ==== 日付ユーティリティ（JST基準）====
 const today = DateTime.now().setZone(TIMEZONE).startOf('day');
-const in2 = today.plus({ days: 2 });
-const in3 = today.plus({ days: 3 });
+const tomorrow = today.plus({ days: 1 });
 const iso = (d: DateTime): string => d.toISODate() || ''; // YYYY-MM-DD
 
 // ==== 祝日スキップ ====
@@ -155,14 +153,15 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
     throw new Error('環境変数 BACKLOG_SPACE / BACKLOG_API_KEY / SLACK_WEBHOOK_URL が未設定です。');
   }
 
-  // 期限の範囲：過去(期限切れ含む)〜3日後までを一気に取得してグルーピング
+  // 期限の範囲：過去(期限切れ含む)〜明日までを一気に取得してグルーピング
   const since = today.minus({ days: 365 }); // 1年分拾えば十分。必要に応じて短縮可
-  const until = in3;
+  const until = tomorrow;
 
-  // 全ての課題を取得（担当者の絞り込みなし）
+  // 自分に担当された課題のみ取得
+  const myself = await getMyself();
   const allIssues = await fetchAllIssues({
     apiKey: API_KEY,
-    // 担当者の絞り込みを削除
+    'assigneeId[]': String(myself.id),
     dueDateSince: iso(since),
     dueDateUntil: iso(until),
     sort: 'dueDate',
@@ -184,8 +183,7 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
   const groups: IssueGroups = {
     overdue: [], // 期限切れ（todayより過去）
     today: [],   // 当日
-    in2: [],     // 2日前（= 期限まで残り2日）
-    in3: []      // 3日前（= 期限まで残り3日）
+    tomorrow: [] // 明日
   };
 
   for (const i of issues) {
@@ -195,8 +193,7 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
 
     if (diffDays < 0) groups.overdue.push(i);
     else if (diffDays === 0) groups.today.push(i);
-    else if (diffDays === 2) groups.in2.push(i);
-    else if (diffDays === 3) groups.in3.push(i);
+    else if (diffDays === 1) groups.tomorrow.push(i);
   }
 
   // Slack メッセージ整形（担当者名も表示）
@@ -214,12 +211,11 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
     `:spiral_calendar_pad: Backlog 期限リマインド (${iso(today)})`,
     section('🟥 期限切れ', groups.overdue),
     section('🟧 当日', groups.today),
-    section('🟨 残り2日', groups.in2),
-    section('🟩 残り3日', groups.in3)
+    section('🟨 明日', groups.tomorrow)
   ].join('\n\n');
 
   // 何もなければ送らない運用にしたい場合は以下でreturn
-  // const total = groups.overdue.length + groups.today.length + groups.in2.length + groups.in3.length;
+  // const total = groups.overdue.length + groups.today.length + groups.tomorrow.length;
   // if (total === 0) { console.log('該当なしのため送信しません'); return; }
 
   // Slack送信
