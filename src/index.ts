@@ -48,14 +48,6 @@ interface BacklogIssue {
   updated: string;
 }
 
-interface BacklogUser {
-  id: number;
-  userId: string;
-  name: string;
-  roleType: number;
-  lang: string | null;
-  mailAddress: string;
-}
 
 interface IssueGroups {
   overdue: BacklogIssue[];
@@ -102,10 +94,6 @@ const fetchJson = async (url: string): Promise<any> => {
   return res.json();
 };
 
-const getMyself = async (): Promise<BacklogUser> => {
-  const url = `${API_BASE}/users/myself?apiKey=${API_KEY}`;
-  return fetchJson(url);
-};
 
 const getProjectStatuses = async (projectId: number): Promise<BacklogStatus[]> => {
   const url = `${API_BASE}/projects/${projectId}/statuses?apiKey=${API_KEY}`;
@@ -157,11 +145,9 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
   const since = today.minus({ days: 365 }); // 1年分拾えば十分。必要に応じて短縮可
   const until = tomorrow;
 
-  // 自分に担当された課題のみ取得
-  const myself = await getMyself();
+  // 全ての課題を取得（担当者問わず）
   const allIssues = await fetchAllIssues({
     apiKey: API_KEY,
-    'assigneeId[]': String(myself.id),
     dueDateSince: iso(since),
     dueDateUntil: iso(until),
     sort: 'dueDate',
