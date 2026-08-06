@@ -212,9 +212,9 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
     section('🟨 明日', groups.tomorrow)
   ].join('\n\n');
 
-  // 何もなければ送らない運用にしたい場合は以下でreturn
-  // const total = groups.overdue.length + groups.today.length + groups.tomorrow.length;
-  // if (total === 0) { console.log('該当なしのため送信しません'); return; }
+  // 該当課題がない場合は送信しない
+  const total = groups.overdue.length + groups.today.length + groups.tomorrow.length;
+  if (total === 0) { console.log('該当なしのため送信しません'); return; }
 
   // Slack送信
   const slackPayload: SlackMessage = { text };
