@@ -73,6 +73,8 @@ const API_KEY: string | undefined = process.env.BACKLOG_API_KEY;      // Backlog
 const SLACK_WEBHOOK_URL: string | undefined = process.env.SLACK_WEBHOOK_URL;
 const TIMEZONE: string = process.env.TIMEZONE || 'Asia/Tokyo';
 const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
+// 通知対象の担当者メールアドレス（カンマ区切りで複数可）。未設定ならAPIキー本人が対象。
+const ASSIGNEE_EMAILS: string = process.env.BACKLOG_ASSIGNEE_EMAILS || '';
 
 // ==== 日付ユーティリティ（JST基準）====
 const today = DateTime.now().setZone(TIMEZONE).startOf('day');
@@ -105,6 +107,46 @@ const getMyself = async (): Promise<BacklogUser> => {
   return fetchJson(url);
 };
 
+const getUsers = async (): Promise<BacklogUser[]> => {
+  const url = `${API_BASE}/users?apiKey=${API_KEY}`;
+  return fetchJson(url);
+};
+
+// メールアドレス（カンマ区切り）→ 担当者IDの配列に解決する
+const resolveAssigneeIds = async (emailsCsv: string): Promise<number[]> => {
+  const emails = emailsCsv
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
+
+  // 未設定ならAPIキー本人を対象にする（後方互換）
+  if (emails.length === 0) {
+    const myself = await getMyself();
+    return [myself.id];
+  }
+
+  const users = await getUsers();
+  const idByEmail = new Map(
+    users
+      .filter(u => u.mailAddress)
+      .map(u => [u.mailAddress.toLowerCase(), u.id] as const)
+  );
+
+  const resolved: number[] = [];
+  const notFound: string[] = [];
+  for (const email of emails) {
+    const id = idByEmail.get(email);
+    if (id === undefined) notFound.push(email);
+    else resolved.push(id);
+  }
+
+  if (notFound.length > 0) {
+    throw new Error(`次のメールアドレスに一致するBacklogユーザーが見つかりません: ${notFound.join(', ')}`);
+  }
+
+  return [...new Set(resolved)]; // 重複除去
+};
+
 const getProjectStatuses = async (projectId: number): Promise<BacklogStatus[]> => {
   const url = `${API_BASE}/projects/${projectId}/statuses?apiKey=${API_KEY}`;
   return fetchJson(url);
@@ -125,9 +167,16 @@ const getCompletedStatusIds = async (projectIds: number[]): Promise<number[]> =>
   return completedIds;
 };
 
-const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIssue[]> => {
-  // params: object -> querystring
-  const q = new URLSearchParams(params);
+const fetchAllIssues = async (params: Record<string, string | string[]>): Promise<BacklogIssue[]> => {
+  // params: object -> querystring（配列値は同一キーで複数展開）
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) {
+      for (const v of value) q.append(key, v);
+    } else {
+      q.append(key, value);
+    }
+  }
   // ページング
   const count = 100;
   let offset = 0;
@@ -145,7 +194,7 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
 };
 
 // ==== メインロジック ====
-// 要件: 自分担当の課題 / 期限が「当日」「期限切れ」
+// 要件: 指定担当者の課題 / 期限が「当日」「期限切れ」
 (async () => {
   if (!SPACE || !API_KEY || !SLACK_WEBHOOK_URL) {
     throw new Error('環境変数 BACKLOG_SPACE / BACKLOG_API_KEY / SLACK_WEBHOOK_URL が未設定です。');
@@ -155,11 +204,11 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
   const since = today.minus({ days: 365 }); // 1年分拾えば十分。必要に応じて短縮可
   const until = today; // 当日まで（明日以降は対象外）
 
-  // 自分に担当された課題のみ取得
-  const myself = await getMyself();
+  // 指定担当者（メールアドレスで解決）の課題のみ取得
+  const assigneeIds = await resolveAssigneeIds(ASSIGNEE_EMAILS);
   const allIssues = await fetchAllIssues({
     apiKey: API_KEY,
-    'assigneeId[]': String(myself.id),
+    'assigneeId[]': assigneeIds.map(String),
     dueDateSince: iso(since),
     dueDateUntil: iso(until),
     sort: 'dueDate',
@@ -193,8 +242,10 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
   }
 
     // Slack メッセージ整形
-  const issueLine = (it: BacklogIssue): string =>
-    `• <https://${SPACE}.${DOMAIN}/view/${it.issueKey}|${it.issueKey}> ${it.summary} [${it.status.name}]`;
+  const issueLine = (it: BacklogIssue): string => {
+    const assignee = it.assignee ? `@${it.assignee.name} ` : '';
+    return `• ${assignee}<https://${SPACE}.${DOMAIN}/view/${it.issueKey}|${it.issueKey}> ${it.summary} [${it.status.name}]`;
+  };
 
   const section = (title: string, arr: BacklogIssue[]): string =>
     arr.length

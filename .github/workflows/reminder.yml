@@ -34,6 +34,7 @@ jobs:
           BACKLOG_SPACE: ${{ secrets.BACKLOG_SPACE }}
           BACKLOG_DOMAIN: ${{ secrets.BACKLOG_DOMAIN }} # 例: backlog.jp / backlog.com
           BACKLOG_API_KEY: ${{ secrets.BACKLOG_API_KEY }}
+          BACKLOG_ASSIGNEE_EMAILS: ${{ secrets.BACKLOG_ASSIGNEE_EMAILS }} # 通知対象のメールアドレス（カンマ区切り）
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           TIMEZONE: Asia/Tokyo
           SKIP_HOLIDAYS: "true"
