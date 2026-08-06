@@ -112,17 +112,20 @@ const getUsers = async (): Promise<BacklogUser[]> => {
   return fetchJson(url);
 };
 
-// メールアドレス（カンマ区切り）→ 担当者IDの配列に解決する
+// APIキー本人は常に対象に含めつつ、メールアドレス（カンマ区切り）で指定された担当者を追加する
 const resolveAssigneeIds = async (emailsCsv: string): Promise<number[]> => {
+  // 本人は常に通知対象
+  const myself = await getMyself();
+  const ids = new Set<number>([myself.id]);
+
   const emails = emailsCsv
     .split(',')
     .map(e => e.trim().toLowerCase())
     .filter(Boolean);
 
-  // 未設定ならAPIキー本人を対象にする（後方互換）
+  // 追加指定がなければ本人のみ
   if (emails.length === 0) {
-    const myself = await getMyself();
-    return [myself.id];
+    return [...ids];
   }
 
   const users = await getUsers();
@@ -132,19 +135,18 @@ const resolveAssigneeIds = async (emailsCsv: string): Promise<number[]> => {
       .map(u => [u.mailAddress.toLowerCase(), u.id] as const)
   );
 
-  const resolved: number[] = [];
   const notFound: string[] = [];
   for (const email of emails) {
     const id = idByEmail.get(email);
     if (id === undefined) notFound.push(email);
-    else resolved.push(id);
+    else ids.add(id);
   }
 
   if (notFound.length > 0) {
     throw new Error(`次のメールアドレスに一致するBacklogユーザーが見つかりません: ${notFound.join(', ')}`);
   }
 
-  return [...new Set(resolved)]; // 重複除去
+  return [...ids]; // 本人＋指定担当者（重複除去済み）
 };
 
 const getProjectStatuses = async (projectId: number): Promise<BacklogStatus[]> => {
