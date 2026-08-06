@@ -60,7 +60,6 @@ interface BacklogUser {
 interface IssueGroups {
   overdue: BacklogIssue[];
   today: BacklogIssue[];
-  tomorrow: BacklogIssue[];
 }
 
 interface SlackMessage {
@@ -77,7 +76,6 @@ const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
 
 // ==== 日付ユーティリティ（JST基準）====
 const today = DateTime.now().setZone(TIMEZONE).startOf('day');
-const tomorrow = today.plus({ days: 1 });
 const iso = (d: DateTime): string => d.toISODate() || ''; // YYYY-MM-DD
 
 // ==== 祝日スキップ ====
@@ -147,7 +145,7 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
 };
 
 // ==== メインロジック ====
-// 要件: 全ての課題 / 期限が「残り3日」「残り2日」「当日」「期限切れ」
+// 要件: 自分担当の課題 / 期限が「当日」「期限切れ」
 (async () => {
   if (!SPACE || !API_KEY || !SLACK_WEBHOOK_URL) {
     throw new Error('環境変数 BACKLOG_SPACE / BACKLOG_API_KEY / SLACK_WEBHOOK_URL が未設定です。');
@@ -155,7 +153,7 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
 
   // 期限の範囲：過去(期限切れ含む)〜明日までを一気に取得してグルーピング
   const since = today.minus({ days: 365 }); // 1年分拾えば十分。必要に応じて短縮可
-  const until = tomorrow;
+  const until = today; // 当日まで（明日以降は対象外）
 
   // 自分に担当された課題のみ取得
   const myself = await getMyself();
@@ -182,8 +180,7 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
   // グルーピング
   const groups: IssueGroups = {
     overdue: [], // 期限切れ（todayより過去）
-    today: [],   // 当日
-    tomorrow: [] // 明日
+    today: []    // 当日
   };
 
   for (const i of issues) {
@@ -193,7 +190,6 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
 
     if (diffDays < 0) groups.overdue.push(i);
     else if (diffDays === 0) groups.today.push(i);
-    else if (diffDays === 1) groups.tomorrow.push(i);
   }
 
     // Slack メッセージ整形
@@ -208,12 +204,11 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
   const text: string = [
     `:spiral_calendar_pad: Backlog 期限リマインド (${iso(today)})`,
     section('🟥 期限切れ', groups.overdue),
-    section('🟧 当日', groups.today),
-    section('🟨 明日', groups.tomorrow)
+    section('🟧 当日', groups.today)
   ].join('\n\n');
 
   // 該当課題がない場合は送信しない
-  const total = groups.overdue.length + groups.today.length + groups.tomorrow.length;
+  const total = groups.overdue.length + groups.today.length;
   if (total === 0) { console.log('該当なしのため送信しません'); return; }
 
   // Slack送信
