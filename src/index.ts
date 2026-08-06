@@ -203,8 +203,8 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
 
   const text: string = [
     `:spiral_calendar_pad: Backlog 期限リマインド (${iso(today)})`,
-    section('🟥 期限切れ', groups.overdue),
-    section('🟧 当日', groups.today)
+    section('🔴 期限切れ', groups.overdue),
+    section('🟠 当日', groups.today)
   ].join('\n\n');
 
   // 該当課題がない場合は送信しない
