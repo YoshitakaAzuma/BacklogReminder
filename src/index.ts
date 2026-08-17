@@ -76,7 +76,9 @@ const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
 // 通知対象の担当者メールアドレス（カンマ区切りで複数可）。未設定ならAPIキー本人が対象。
 const ASSIGNEE_EMAILS: string = process.env.BACKLOG_ASSIGNEE_EMAILS || '';
 // 通知対象に含めるメールドメイン（カンマ区切りで複数可）。一致するユーザー全員が対象に加わる。
-const ASSIGNEE_DOMAINS: string = process.env.BACKLOG_ASSIGNEE_DOMAINS || '';
+// 既定はコード内の定数。環境変数 BACKLOG_ASSIGNEE_DOMAINS を設定した場合はそちらで上書きする。
+const DEFAULT_ASSIGNEE_DOMAINS = 'gemcook.com';
+const ASSIGNEE_DOMAINS: string = process.env.BACKLOG_ASSIGNEE_DOMAINS || DEFAULT_ASSIGNEE_DOMAINS;
 
 // ==== 日付ユーティリティ（JST基準）====
 const today = DateTime.now().setZone(TIMEZONE).startOf('day');
