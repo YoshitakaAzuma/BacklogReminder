@@ -135,12 +135,20 @@ const resolveAssigneeIds = async (emailsCsv: string, domainsCsv: string): Promis
   }
 
   const users = await getUsers();
-  const activeUsers = users.filter(u => u.mailAddress);
-  const idByEmail = new Map(
-    activeUsers.map(u => [u.mailAddress.toLowerCase(), u.id] as const)
-  );
+  const usersWithEmail = users.filter(u => u.mailAddress);
 
-  // ② 個別メール指定：一致するユーザーを追加（見つからなければエラー）
+  // 1パスで「メール→ID」の索引作成と、③ドメイン一致ユーザーの追加を同時に行う
+  const domainSet = new Set(domains);
+  const idByEmail = new Map<string, number>();
+  for (const u of usersWithEmail) {
+    const email = u.mailAddress.toLowerCase();
+    idByEmail.set(email, u.id);
+    // ③ ドメイン指定：メールドメインが一致するユーザーを全員追加
+    const domain = email.slice(email.lastIndexOf('@') + 1);
+    if (domain && domainSet.has(domain)) ids.add(u.id);
+  }
+
+  // ② 個別メール指定：一致するユーザーを追加（見つからなければエラー＝設定ミス検知）
   const notFound: string[] = [];
   for (const email of emails) {
     const id = idByEmail.get(email);
@@ -149,15 +157,6 @@ const resolveAssigneeIds = async (emailsCsv: string, domainsCsv: string): Promis
   }
   if (notFound.length > 0) {
     throw new Error(`次のメールアドレスに一致するBacklogユーザーが見つかりません: ${notFound.join(', ')}`);
-  }
-
-  // ③ ドメイン指定：メールドメインが一致するユーザーを全員追加
-  if (domains.length > 0) {
-    const domainSet = new Set(domains);
-    for (const u of activeUsers) {
-      const domain = u.mailAddress.toLowerCase().split('@')[1];
-      if (domain && domainSet.has(domain)) ids.add(u.id);
-    }
   }
 
   return [...ids]; // 本人＋指定担当者（重複除去済み）
@@ -220,16 +219,25 @@ const fetchAllIssues = async (params: Record<string, string | string[]>): Promis
   const since = today.minus({ days: 365 }); // 1年分拾えば十分。必要に応じて短縮可
   const until = today; // 当日まで（明日以降は対象外）
 
-  // 指定担当者（メールアドレスで解決）の課題のみ取得
+  // 指定担当者（メール／ドメインで解決）の課題のみ取得
   const assigneeIds = await resolveAssigneeIds(ASSIGNEE_EMAILS, ASSIGNEE_DOMAINS);
-  const allIssues = await fetchAllIssues({
-    apiKey: API_KEY,
-    'assigneeId[]': assigneeIds.map(String),
-    dueDateSince: iso(since),
-    dueDateUntil: iso(until),
-    sort: 'dueDate',
-    order: 'asc'
-  });
+
+  // 担当者が多いとGETのURLが長くなりHTTP 414等を招くため、assigneeIdを分割取得してマージ
+  const ASSIGNEE_CHUNK = 30;
+  const issuesById = new Map<number, BacklogIssue>();
+  for (let i = 0; i < assigneeIds.length; i += ASSIGNEE_CHUNK) {
+    const chunk = assigneeIds.slice(i, i + ASSIGNEE_CHUNK);
+    const page = await fetchAllIssues({
+      apiKey: API_KEY,
+      'assigneeId[]': chunk.map(String),
+      dueDateSince: iso(since),
+      dueDateUntil: iso(until),
+      sort: 'dueDate',
+      order: 'asc'
+    });
+    for (const it of page) issuesById.set(it.id, it); // issue.id で重複除去
+  }
+  const allIssues = [...issuesById.values()];
 
   // プロジェクトIDを抽出
   const projectIds = [...new Set(allIssues.map(issue => issue.projectId))];
