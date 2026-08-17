@@ -75,6 +75,8 @@ const TIMEZONE: string = process.env.TIMEZONE || 'Asia/Tokyo';
 const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
 // 通知対象の担当者メールアドレス（カンマ区切りで複数可）。未設定ならAPIキー本人が対象。
 const ASSIGNEE_EMAILS: string = process.env.BACKLOG_ASSIGNEE_EMAILS || '';
+// 通知対象に含めるメールドメイン（カンマ区切りで複数可）。一致するユーザー全員が対象に加わる。
+const ASSIGNEE_DOMAINS: string = process.env.BACKLOG_ASSIGNEE_DOMAINS || '';
 
 // ==== 日付ユーティリティ（JST基準）====
 const today = DateTime.now().setZone(TIMEZONE).startOf('day');
@@ -112,8 +114,8 @@ const getUsers = async (): Promise<BacklogUser[]> => {
   return fetchJson(url);
 };
 
-// APIキー本人は常に対象に含めつつ、メールアドレス（カンマ区切り）で指定された担当者を追加する
-const resolveAssigneeIds = async (emailsCsv: string): Promise<number[]> => {
+// APIキー本人は常に対象に含めつつ、指定メール／指定ドメインの担当者を追加する
+const resolveAssigneeIds = async (emailsCsv: string, domainsCsv: string): Promise<number[]> => {
   // 本人は常に通知対象
   const myself = await getMyself();
   const ids = new Set<number>([myself.id]);
@@ -122,28 +124,40 @@ const resolveAssigneeIds = async (emailsCsv: string): Promise<number[]> => {
     .split(',')
     .map(e => e.trim().toLowerCase())
     .filter(Boolean);
+  const domains = domainsCsv
+    .split(',')
+    .map(d => d.trim().toLowerCase().replace(/^@/, '')) // 先頭の@は許容
+    .filter(Boolean);
 
   // 追加指定がなければ本人のみ
-  if (emails.length === 0) {
+  if (emails.length === 0 && domains.length === 0) {
     return [...ids];
   }
 
   const users = await getUsers();
+  const activeUsers = users.filter(u => u.mailAddress);
   const idByEmail = new Map(
-    users
-      .filter(u => u.mailAddress)
-      .map(u => [u.mailAddress.toLowerCase(), u.id] as const)
+    activeUsers.map(u => [u.mailAddress.toLowerCase(), u.id] as const)
   );
 
+  // ② 個別メール指定：一致するユーザーを追加（見つからなければエラー）
   const notFound: string[] = [];
   for (const email of emails) {
     const id = idByEmail.get(email);
     if (id === undefined) notFound.push(email);
     else ids.add(id);
   }
-
   if (notFound.length > 0) {
     throw new Error(`次のメールアドレスに一致するBacklogユーザーが見つかりません: ${notFound.join(', ')}`);
+  }
+
+  // ③ ドメイン指定：メールドメインが一致するユーザーを全員追加
+  if (domains.length > 0) {
+    const domainSet = new Set(domains);
+    for (const u of activeUsers) {
+      const domain = u.mailAddress.toLowerCase().split('@')[1];
+      if (domain && domainSet.has(domain)) ids.add(u.id);
+    }
   }
 
   return [...ids]; // 本人＋指定担当者（重複除去済み）
@@ -207,7 +221,7 @@ const fetchAllIssues = async (params: Record<string, string | string[]>): Promis
   const until = today; // 当日まで（明日以降は対象外）
 
   // 指定担当者（メールアドレスで解決）の課題のみ取得
-  const assigneeIds = await resolveAssigneeIds(ASSIGNEE_EMAILS);
+  const assigneeIds = await resolveAssigneeIds(ASSIGNEE_EMAILS, ASSIGNEE_DOMAINS);
   const allIssues = await fetchAllIssues({
     apiKey: API_KEY,
     'assigneeId[]': assigneeIds.map(String),
