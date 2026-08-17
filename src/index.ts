@@ -73,10 +73,9 @@ const API_KEY: string | undefined = process.env.BACKLOG_API_KEY;      // Backlog
 const SLACK_WEBHOOK_URL: string | undefined = process.env.SLACK_WEBHOOK_URL;
 const TIMEZONE: string = process.env.TIMEZONE || 'Asia/Tokyo';
 const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
-// 通知対象の担当者メールアドレス（カンマ区切りで複数可）。未設定ならAPIキー本人が対象。
-const ASSIGNEE_EMAILS: string = process.env.BACKLOG_ASSIGNEE_EMAILS || '';
-// 通知対象に含めるメールドメイン（カンマ区切りで複数可）。一致するユーザー全員が対象に加わる。
-const ASSIGNEE_DOMAINS = 'gemcook.com';
+// 通知に載せる課題の対象ドメイン。担当者のメールがこのドメインの課題だけを通知する。
+// （本人もこのドメインのユーザーなので自然に含まれる）
+const TARGET_DOMAINS = new Set(['gemcook.com']);
 
 // ==== 日付ユーティリティ（JST基準）====
 const today = DateTime.now().setZone(TIMEZONE).startOf('day');
@@ -104,62 +103,12 @@ const fetchJson = async (url: string): Promise<any> => {
   return res.json();
 };
 
-const getMyself = async (): Promise<BacklogUser> => {
-  const url = `${API_BASE}/users/myself?apiKey=${API_KEY}`;
-  return fetchJson(url);
-};
-
-const getUsers = async (): Promise<BacklogUser[]> => {
-  const url = `${API_BASE}/users?apiKey=${API_KEY}`;
-  return fetchJson(url);
-};
-
-// APIキー本人は常に対象に含めつつ、指定メール／指定ドメインの担当者を追加する
-const resolveAssigneeIds = async (emailsCsv: string, domainsCsv: string): Promise<number[]> => {
-  // 本人は常に通知対象
-  const myself = await getMyself();
-  const ids = new Set<number>([myself.id]);
-
-  const emails = emailsCsv
-    .split(',')
-    .map(e => e.trim().toLowerCase())
-    .filter(Boolean);
-  const domains = domainsCsv
-    .split(',')
-    .map(d => d.trim().toLowerCase().replace(/^@/, '')) // 先頭の@は許容
-    .filter(Boolean);
-
-  // 追加指定がなければ本人のみ
-  if (emails.length === 0 && domains.length === 0) {
-    return [...ids];
-  }
-
-  const users = await getUsers();
-  const usersWithEmail = users.filter(u => u.mailAddress);
-
-  // 1パスで「メール→ID」の索引作成と、③ドメイン一致ユーザーの追加を同時に行う
-  const domainSet = new Set(domains);
-  const idByEmail = new Map<string, number>();
-  for (const u of usersWithEmail) {
-    const email = u.mailAddress.toLowerCase();
-    idByEmail.set(email, u.id);
-    // ③ ドメイン指定：メールドメインが一致するユーザーを全員追加
-    const domain = email.slice(email.lastIndexOf('@') + 1);
-    if (domain && domainSet.has(domain)) ids.add(u.id);
-  }
-
-  // ② 個別メール指定：一致するユーザーを追加（見つからなければエラー＝設定ミス検知）
-  const notFound: string[] = [];
-  for (const email of emails) {
-    const id = idByEmail.get(email);
-    if (id === undefined) notFound.push(email);
-    else ids.add(id);
-  }
-  if (notFound.length > 0) {
-    throw new Error(`次のメールアドレスに一致するBacklogユーザーが見つかりません: ${notFound.join(', ')}`);
-  }
-
-  return [...ids]; // 本人＋指定担当者（重複除去済み）
+// 課題の担当者のメールドメインが対象ドメインかどうか（担当者未設定は対象外）
+const isTargetAssignee = (issue: BacklogIssue): boolean => {
+  const email = issue.assignee?.mailAddress?.toLowerCase();
+  if (!email) return false;
+  const domain = email.slice(email.lastIndexOf('@') + 1);
+  return TARGET_DOMAINS.has(domain);
 };
 
 const getProjectStatuses = async (projectId: number): Promise<BacklogStatus[]> => {
@@ -182,16 +131,9 @@ const getCompletedStatusIds = async (projectIds: number[]): Promise<number[]> =>
   return completedIds;
 };
 
-const fetchAllIssues = async (params: Record<string, string | string[]>): Promise<BacklogIssue[]> => {
-  // params: object -> querystring（配列値は同一キーで複数展開）
-  const q = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (Array.isArray(value)) {
-      for (const v of value) q.append(key, v);
-    } else {
-      q.append(key, value);
-    }
-  }
+const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIssue[]> => {
+  // params: object -> querystring
+  const q = new URLSearchParams(params);
   // ページング
   const count = 100;
   let offset = 0;
@@ -209,7 +151,7 @@ const fetchAllIssues = async (params: Record<string, string | string[]>): Promis
 };
 
 // ==== メインロジック ====
-// 要件: 指定担当者の課題 / 期限が「当日」「期限切れ」
+// 要件: 対象ドメイン担当者の課題 / 期限が「当日」「期限切れ」
 (async () => {
   if (!SPACE || !API_KEY || !SLACK_WEBHOOK_URL) {
     throw new Error('環境変数 BACKLOG_SPACE / BACKLOG_API_KEY / SLACK_WEBHOOK_URL が未設定です。');
@@ -219,34 +161,26 @@ const fetchAllIssues = async (params: Record<string, string | string[]>): Promis
   const since = today.minus({ days: 365 }); // 1年分拾えば十分。必要に応じて短縮可
   const until = today; // 当日まで（明日以降は対象外）
 
-  // 指定担当者（メール／ドメインで解決）の課題のみ取得
-  const assigneeIds = await resolveAssigneeIds(ASSIGNEE_EMAILS, ASSIGNEE_DOMAINS);
+  // 担当者では絞らず、期限範囲の課題をまとめて取得（担当者は後段でドメインでフィルタ）
+  const allIssues = await fetchAllIssues({
+    apiKey: API_KEY,
+    dueDateSince: iso(since),
+    dueDateUntil: iso(until),
+    sort: 'dueDate',
+    order: 'asc'
+  });
 
-  // 担当者が多いとGETのURLが長くなりHTTP 414等を招くため、assigneeIdを分割取得してマージ
-  const ASSIGNEE_CHUNK = 30;
-  const issuesById = new Map<number, BacklogIssue>();
-  for (let i = 0; i < assigneeIds.length; i += ASSIGNEE_CHUNK) {
-    const chunk = assigneeIds.slice(i, i + ASSIGNEE_CHUNK);
-    const page = await fetchAllIssues({
-      apiKey: API_KEY,
-      'assigneeId[]': chunk.map(String),
-      dueDateSince: iso(since),
-      dueDateUntil: iso(until),
-      sort: 'dueDate',
-      order: 'asc'
-    });
-    for (const it of page) issuesById.set(it.id, it); // issue.id で重複除去
-  }
-  const allIssues = [...issuesById.values()];
+  // 対象ドメイン（gemcook.com）の担当者の課題のみに絞り込む（本人もこのドメインなので含まれる）
+  const domainIssues = allIssues.filter(isTargetAssignee);
 
   // プロジェクトIDを抽出
-  const projectIds = [...new Set(allIssues.map(issue => issue.projectId))];
-  
+  const projectIds = [...new Set(domainIssues.map(issue => issue.projectId))];
+
   // 完了ステータスのIDを取得
   const completedStatusIds = await getCompletedStatusIds(projectIds);
-  
+
   // 完了ステータス以外の課題のみにフィルタリング
-  const issues = allIssues.filter(issue => 
+  const issues = domainIssues.filter(issue =>
     !completedStatusIds.includes(issue.status.id)
   );
 
