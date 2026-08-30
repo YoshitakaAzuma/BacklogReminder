@@ -1,0 +1,35 @@
+name: Backlog Due Date Auto-Extend
+
+on:
+  schedule:
+    - cron: '50 2 * * 1-5'   # 平日 11:50 JST (= 02:50 UTC)
+  workflow_dispatch: {}       # 手動実行も可
+
+jobs:
+  extend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Run extend
+        run: npm run extend
+        env:
+          BACKLOG_SPACE: ${{ secrets.BACKLOG_SPACE }}
+          BACKLOG_DOMAIN: ${{ secrets.BACKLOG_DOMAIN }} # 例: backlog.jp / backlog.com
+          BACKLOG_API_KEY: ${{ secrets.BACKLOG_API_KEY }}
+          TIMEZONE: Asia/Tokyo
+          SKIP_HOLIDAYS: "true"

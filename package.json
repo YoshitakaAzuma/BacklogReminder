@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "start": "ts-node src/index.ts",
+    "extend": "ts-node src/extend-duedate.ts",
     "build": "tsc",
     "lint": "tsc --noEmit",
     "test": "echo \"No tests specified\" && exit 0"
