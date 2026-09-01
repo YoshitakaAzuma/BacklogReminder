@@ -78,8 +78,12 @@ const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
 const TARGET_DOMAINS = new Set(['gemcook.com']);
 
 // ==== 日付ユーティリティ（JST基準）====
-const today = DateTime.now().setZone(TIMEZONE).startOf('day');
+const now = DateTime.now().setZone(TIMEZONE);
+const today = now.startOf('day');
 const iso = (d: DateTime): string => d.toISODate() || ''; // YYYY-MM-DD
+
+// 深夜帯（0:00〜3:59 JST）は「期限切れ」だけを通知する
+const OVERDUE_ONLY = now.hour < 4;
 
 // ==== 祝日スキップ ====
 if (SKIP_HOLIDAYS) {
@@ -210,14 +214,17 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
       ? `*${title}*\n${arr.map(issueLine).join('\n')}`
       : `*${title}*\n（該当なし）`;
 
+  // 深夜帯は「期限切れ」のみ、それ以外は「期限切れ＋当日」
+  const sections = [section('🔴 期限切れ', groups.overdue)];
+  if (!OVERDUE_ONLY) sections.push(section('🟠 当日', groups.today));
+
   const text: string = [
     `:spiral_calendar_pad: Backlog 期限リマインド (${iso(today)})`,
-    section('🔴 期限切れ', groups.overdue),
-    section('🟠 当日', groups.today)
+    ...sections
   ].join('\n\n');
 
-  // 該当課題がない場合は送信しない
-  const total = groups.overdue.length + groups.today.length;
+  // 該当課題がない場合は送信しない（深夜帯は期限切れのみを対象に判定）
+  const total = groups.overdue.length + (OVERDUE_ONLY ? 0 : groups.today.length);
   if (total === 0) { console.log('該当なしのため送信しません'); return; }
 
   // Slack送信
