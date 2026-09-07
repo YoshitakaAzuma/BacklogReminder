@@ -71,6 +71,8 @@ const SPACE: string | undefined = process.env.BACKLOG_SPACE;          // 例: "y
 const DOMAIN: string = process.env.BACKLOG_DOMAIN || 'backlog.jp'; // "backlog.jp" or "backlog.com"
 const API_KEY: string | undefined = process.env.BACKLOG_API_KEY;      // Backlog API key
 const SLACK_WEBHOOK_URL: string | undefined = process.env.SLACK_WEBHOOK_URL;
+// LINE Messaging API のチャネルアクセストークン（長期）。設定時のみLINEブロードキャスト送信。
+const LINE_CHANNEL_ACCESS_TOKEN: string | undefined = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const TIMEZONE: string = process.env.TIMEZONE || 'Asia/Tokyo';
 const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
 // 通知に載せる課題の対象ドメイン。担当者のメールがこのドメインの課題だけを通知する。
@@ -203,43 +205,72 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
     else if (diffDays === 0) groups.today.push(i);
   }
 
-    // Slack メッセージ整形
-  const issueLine = (it: BacklogIssue): string => {
-    const assignee = it.assignee ? `@${it.assignee.name} ` : '';
-    return `• ${assignee}<https://${SPACE}.${DOMAIN}/view/${it.issueKey}|${it.issueKey}> ${it.summary} [${it.status.name}]`;
-  };
+  // 表示するセクション（深夜帯は「期限切れ」のみ、それ以外は「期限切れ＋当日」）
+  const shownGroups: Array<{ label: string; issues: BacklogIssue[] }> = [
+    { label: '🔴 期限切れ', issues: groups.overdue }
+  ];
+  if (!OVERDUE_ONLY) shownGroups.push({ label: '🟠 当日', issues: groups.today });
 
-  const section = (title: string, arr: BacklogIssue[]): string =>
-    arr.length
-      ? `*${title}*\n${arr.map(issueLine).join('\n')}`
-      : `*${title}*\n（該当なし）`;
-
-  // 深夜帯は「期限切れ」のみ、それ以外は「期限切れ＋当日」
-  const sections = [section('🔴 期限切れ', groups.overdue)];
-  if (!OVERDUE_ONLY) sections.push(section('🟠 当日', groups.today));
-
-  const text: string = [
-    `:spiral_calendar_pad: Backlog 期限リマインド (${iso(today)})`,
-    ...sections
-  ].join('\n\n');
-
-  // 該当課題がない場合は送信しない（深夜帯は期限切れのみを対象に判定）
-  const total = groups.overdue.length + (OVERDUE_ONLY ? 0 : groups.today.length);
+  // 該当課題がない場合は送信しない
+  const total = shownGroups.reduce((n, g) => n + g.issues.length, 0);
   if (total === 0) { console.log('該当なしのため送信しません'); return; }
 
-  // Slack送信
-  const slackPayload: SlackMessage = { text };
-  const res = await fetch(SLACK_WEBHOOK_URL, {
+  const issueUrl = (it: BacklogIssue): string => `https://${SPACE}.${DOMAIN}/view/${it.issueKey}`;
+  const assigneePrefix = (it: BacklogIssue): string => (it.assignee ? `@${it.assignee.name} ` : '');
+
+  // ---- Slack（mrkdwn: リンク記法・太字が使える）----
+  const slackLine = (it: BacklogIssue): string =>
+    `• ${assigneePrefix(it)}<${issueUrl(it)}|${it.issueKey}> ${it.summary} [${it.status.name}]`;
+  const slackSection = (g: { label: string; issues: BacklogIssue[] }): string =>
+    g.issues.length ? `*${g.label}*\n${g.issues.map(slackLine).join('\n')}` : `*${g.label}*\n（該当なし）`;
+  const slackText = [
+    `:spiral_calendar_pad: Backlog 期限リマインド (${iso(today)})`,
+    ...shownGroups.map(slackSection)
+  ].join('\n\n');
+
+  // ---- LINE（プレーンテキスト: URLはそのまま貼るとリンク化される）----
+  const lineLine = (it: BacklogIssue): string =>
+    `・${assigneePrefix(it)}${it.issueKey} ${it.summary} [${it.status.name}]\n${issueUrl(it)}`;
+  const lineSection = (g: { label: string; issues: BacklogIssue[] }): string =>
+    g.issues.length ? `${g.label}\n${g.issues.map(lineLine).join('\n')}` : `${g.label}\n（該当なし）`;
+  const lineText = [
+    `🗓 Backlog 期限リマインド (${iso(today)})`,
+    ...shownGroups.map(lineSection)
+  ].join('\n\n');
+
+  // ---- Slack送信 ----
+  const slackPayload: SlackMessage = { text: slackText };
+  const slackRes = await fetch(SLACK_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(slackPayload)
   });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Slack送信失敗: HTTP ${res.status} ${t}`);
+  if (!slackRes.ok) {
+    const t = await slackRes.text();
+    throw new Error(`Slack送信失敗: HTTP ${slackRes.status} ${t}`);
   }
-
   console.log('Slackへ送信しました。');
+
+  // ---- LINE送信（トークン設定時のみ、友だち全員へブロードキャスト）----
+  if (LINE_CHANNEL_ACCESS_TOKEN) {
+    // LINEのテキストは1メッセージ5000字まで
+    const lineBody = lineText.length > 5000 ? `${lineText.slice(0, 4900)}\n…(以下省略)` : lineText;
+    const lineRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`
+      },
+      body: JSON.stringify({ messages: [{ type: 'text', text: lineBody }] })
+    });
+    if (!lineRes.ok) {
+      const t = await lineRes.text();
+      throw new Error(`LINE送信失敗: HTTP ${lineRes.status} ${t}`);
+    }
+    console.log('LINEへ送信しました。');
+  } else {
+    console.log('LINE_CHANNEL_ACCESS_TOKEN 未設定のためLINE送信はスキップしました。');
+  }
 })().catch((e: Error) => {
   console.error(e);
   process.exit(1);
