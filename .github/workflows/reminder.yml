@@ -35,5 +35,6 @@ jobs:
           BACKLOG_DOMAIN: ${{ secrets.BACKLOG_DOMAIN }} # 例: backlog.jp / backlog.com
           BACKLOG_API_KEY: ${{ secrets.BACKLOG_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }} # LINE Messaging API（未設定ならLINE送信はスキップ）
           TIMEZONE: Asia/Tokyo
           SKIP_HOLIDAYS: "true"
