@@ -75,9 +75,15 @@ const SLACK_WEBHOOK_URL: string | undefined = process.env.SLACK_WEBHOOK_URL;
 const LINE_CHANNEL_ACCESS_TOKEN: string | undefined = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const TIMEZONE: string = process.env.TIMEZONE || 'Asia/Tokyo';
 const SKIP_HOLIDAYS: boolean = (process.env.SKIP_HOLIDAYS || 'true') === 'true';
-// 通知に載せる課題の対象ドメイン。担当者のメールがこのドメインの課題だけを通知する。
-// （本人もこのドメインのユーザーなので自然に含まれる）
-const TARGET_DOMAINS = new Set(['gemcook.com']);
+// 通知に載せる課題の担当者（Backlog のユーザーID・数値、カンマ区切り）。
+// APIキーの持ち主（本人）は指定しなくても自動で含める。
+// ※ Backlog API は本人以外の mailAddress を返さないため、メールのドメインでは判定できない。
+const TARGET_USER_IDS: Set<number> = new Set(
+  (process.env.TARGET_USER_IDS || '')
+    .split(',')
+    .map(s => Number(s.trim()))
+    .filter(n => Number.isInteger(n) && n > 0)
+);
 
 // ==== 日付ユーティリティ（JST基準）====
 const now = DateTime.now().setZone(TIMEZONE);
@@ -109,13 +115,12 @@ const fetchJson = async (url: string): Promise<any> => {
   return res.json();
 };
 
-// 課題の担当者のメールドメインが対象ドメインかどうか（担当者未設定は対象外）
-const isTargetAssignee = (issue: BacklogIssue): boolean => {
-  const email = issue.assignee?.mailAddress?.toLowerCase();
-  if (!email) return false;
-  const domain = email.slice(email.lastIndexOf('@') + 1);
-  return TARGET_DOMAINS.has(domain);
-};
+// 課題の担当者が対象ユーザーかどうか（担当者未設定は対象外）
+const isTargetAssignee = (issue: BacklogIssue): boolean =>
+  issue.assignee != null && TARGET_USER_IDS.has(issue.assignee.id);
+
+const getMyself = async (): Promise<BacklogUser> =>
+  fetchJson(`${API_BASE}/users/myself?apiKey=${API_KEY}`);
 
 const getProjectStatuses = async (projectId: number): Promise<BacklogStatus[]> => {
   const url = `${API_BASE}/projects/${projectId}/statuses?apiKey=${API_KEY}`;
@@ -157,17 +162,21 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
 };
 
 // ==== メインロジック ====
-// 要件: 対象ドメイン担当者の課題 / 期限が「当日」「期限切れ」
+// 要件: 対象ユーザー（本人＋TARGET_USER_IDS）担当の課題 / 期限が「当日」「期限切れ」
 (async () => {
   if (!SPACE || !API_KEY || !SLACK_WEBHOOK_URL) {
     throw new Error('環境変数 BACKLOG_SPACE / BACKLOG_API_KEY / SLACK_WEBHOOK_URL が未設定です。');
   }
 
+  // 本人を対象に加える
+  const me = await getMyself();
+  TARGET_USER_IDS.add(me.id);
+
   // 期限の範囲：過去(期限切れ含む)〜明日までを一気に取得してグルーピング
   const since = today.minus({ days: 365 }); // 1年分拾えば十分。必要に応じて短縮可
   const until = today; // 当日まで（明日以降は対象外）
 
-  // 担当者では絞らず、期限範囲の課題をまとめて取得（担当者は後段でドメインでフィルタ）
+  // 担当者では絞らず、期限範囲の課題をまとめて取得（担当者は後段でユーザーIDでフィルタ）
   const allIssues = await fetchAllIssues({
     apiKey: API_KEY,
     dueDateSince: iso(since),
@@ -176,17 +185,17 @@ const fetchAllIssues = async (params: Record<string, string>): Promise<BacklogIs
     order: 'asc'
   });
 
-  // 対象ドメイン（gemcook.com）の担当者の課題のみに絞り込む（本人もこのドメインなので含まれる）
-  const domainIssues = allIssues.filter(isTargetAssignee);
+  // 対象ユーザーの担当課題のみに絞り込む
+  const targetIssues = allIssues.filter(isTargetAssignee);
 
   // プロジェクトIDを抽出
-  const projectIds = [...new Set(domainIssues.map(issue => issue.projectId))];
+  const projectIds = [...new Set(targetIssues.map(issue => issue.projectId))];
 
   // 完了ステータスのIDを取得
   const completedStatusIds = await getCompletedStatusIds(projectIds);
 
   // 完了ステータス以外の課題のみにフィルタリング
-  const issues = domainIssues.filter(issue =>
+  const issues = targetIssues.filter(issue =>
     !completedStatusIds.includes(issue.status.id)
   );
 

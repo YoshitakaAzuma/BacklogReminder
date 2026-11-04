@@ -38,3 +38,4 @@ jobs:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }} # LINE Messaging API（未設定ならLINE送信はスキップ）
           TIMEZONE: Asia/Tokyo
           SKIP_HOLIDAYS: "true"
+          TARGET_USER_IDS: ${{ vars.TARGET_USER_IDS }} # 本人以外の通知対象（Backlog ユーザーID、カンマ区切り。リポジトリ変数で設定）
